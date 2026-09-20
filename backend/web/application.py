@@ -1023,6 +1023,25 @@ def create_app() -> FastAPI:
     def api_account_relogin_status() -> Dict[str, Any]:
         return {"ok": True, "relogin": relogin_coordinator.status()}
 
+    @app.get("/api/accounts/relogin/logs")
+    def api_account_relogin_logs(
+        after_id: int = Query(0, ge=0),
+        limit: int = Query(500, ge=1, le=2000),
+    ) -> Dict[str, Any]:
+        return {
+            "ok": True,
+            "logs": relogin_coordinator.get_logs(after_id=after_id, limit=limit),
+            "relogin": relogin_coordinator.status(),
+        }
+
+    @app.post("/api/accounts/relogin/stop")
+    def api_account_relogin_stop() -> Dict[str, Any]:
+        try:
+            status = relogin_coordinator.stop()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"停止失败: {exc}") from exc
+        return {"ok": True, "relogin": status}
+
     @app.get("/api/accounts/select-ids")
     def api_account_select_ids(
         status: str = Query(""),

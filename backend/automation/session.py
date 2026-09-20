@@ -510,7 +510,7 @@ def inspect_low_traffic_cache() -> dict:
 
 
 def clear_low_traffic_cache() -> dict:
-    """删除本地静态资源缓存。下次打开注册页会按当前省流级别重新下载并写入。"""
+    """删除本地静态资源缓存。下次打开注册页或重新登录页会按当前省流级别重新下载并写入。"""
     global _low_traffic_cache_pruned
     root = _low_traffic_cache_root()
     deleted = 0

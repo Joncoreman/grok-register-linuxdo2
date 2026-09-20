@@ -179,7 +179,7 @@ function LowTrafficCachePanel({
             静态资源缓存
           </div>
           <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-            清空后下次打开注册页会按当前省流级别自动重新下载并写入。较少节省只生效 grok.com CDN；更多节省额外生效 accounts.x.ai 哈希资源。
+            清空后下次打开注册页或重新登录页会按当前省流级别自动重新下载并写入。较少节省只生效 grok.com CDN；更多节省额外生效 accounts.x.ai 哈希资源。
           </p>
         </div>
         <div className="flex shrink-0 gap-2">
@@ -239,7 +239,7 @@ function LowTrafficCachePanel({
         </div>
       ) : (
         <p className="text-xs text-muted-foreground">
-          {loading ? "正在读取缓存…" : "还没有缓存文件。开启低流量模式后，首次打开注册页会自动下载并保存。"}
+          {loading ? "正在读取缓存…" : "还没有缓存文件。开启低流量模式后，首次打开注册页或重新登录页会自动下载并保存。"}
         </p>
       )}
     </div>
@@ -525,7 +525,7 @@ export function SettingsPage({ section = "registration" }: { section?: SettingsS
   };
 
   const clearBrowserCache = async () => {
-    if (!window.confirm("清空本地静态资源缓存？下次打开注册页会按当前省流级别重新下载。")) {
+    if (!window.confirm("清空本地静态资源缓存？下次打开注册页或重新登录页会按当前省流级别重新下载。")) {
       return;
     }
     setCacheClearing(true);
@@ -776,8 +776,8 @@ export function SettingsPage({ section = "registration" }: { section?: SettingsS
                 onCheckedChange={(value) => setField("browser_headless", value)}
               />
               <ToggleRow
-                title="低流量注册模式"
-                description="复用静态资源缓存并跳过非注册必需媒体；较少节省只缓存 grok.com CDN，更多节省额外缓存 accounts.x.ai 哈希资源"
+                title="低流量模式"
+                description="注册和重新登录共用静态资源缓存，并跳过非必需媒体；较少节省只缓存 grok.com CDN，更多节省额外缓存 accounts.x.ai 哈希资源"
                 checked={!!config.browser_low_traffic_mode}
                 onCheckedChange={(value) => setField("browser_low_traffic_mode", value)}
               />

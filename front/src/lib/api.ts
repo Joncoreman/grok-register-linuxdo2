@@ -205,6 +205,7 @@ export type ReloginItem = {
   error: string;
   stage?: string;
   error_type?: string;
+  failure_type?: string;
   url?: string;
   page_title?: string;
   visible_error?: string;
@@ -224,6 +225,7 @@ export type ReloginItem = {
 
 export type ReloginStatus = {
   running: boolean;
+  stopping?: boolean;
   account_id: number;
   email: string;
   stage: string;
@@ -235,6 +237,8 @@ export type ReloginStatus = {
   success_count: number;
   failed_count: number;
   run_id: string;
+  log_count?: number;
+  latest_log_id?: number;
   items: ReloginItem[];
 };
 
@@ -469,6 +473,14 @@ export const api = {
     }),
   reloginStatus: () =>
     request<{ ok: boolean; relogin: ReloginStatus }>("/api/accounts/relogin/status"),
+  reloginLogs: (afterId = 0, limit = 500) =>
+    request<{ ok: boolean; logs: LogItem[]; relogin: ReloginStatus }>(
+      `/api/accounts/relogin/logs?after_id=${afterId}&limit=${limit}`
+    ),
+  stopRelogin: () =>
+    request<{ ok: boolean; relogin: ReloginStatus }>("/api/accounts/relogin/stop", {
+      method: "POST",
+    }),
   startSsoCheck: (ids: number[]) =>
     request<{ ok: boolean; sso_check: SsoCheckStatus }>("/api/accounts/sso-check", {
       method: "POST",

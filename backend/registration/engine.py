@@ -532,6 +532,7 @@ FAIL_BROWSER = "browser"
 FAIL_CPA = "cpa"
 FAIL_STUCK = "stuck_retry"
 FAIL_SSO = "sso_timeout"
+FAIL_INVALID_CREDENTIALS = "invalid_credentials"
 FAIL_OTHER = "other"
 
 FAIL_LABELS = {
@@ -543,19 +544,29 @@ FAIL_LABELS = {
     FAIL_CPA: "CPA失败",
     FAIL_STUCK: "流程卡住",
     FAIL_SSO: "SSO超时",
+    FAIL_INVALID_CREDENTIALS: "账号密码错误",
     FAIL_OTHER: "其它",
 }
 
 
 def classify_failure(exc) -> str:
+    from backend.registration.login_flow import (
+        InvalidLoginCredentials,
+        looks_like_invalid_credentials,
+    )
+
     if isinstance(exc, EmailDomainRejected):
         return FAIL_DOMAIN
     if isinstance(exc, _rf.AccountAlreadyRegistered):
         return FAIL_ALREADY_REGISTERED
     if isinstance(exc, RegistrationRiskDenied):
         return FAIL_RISK
+    if isinstance(exc, InvalidLoginCredentials):
+        return FAIL_INVALID_CREDENTIALS
     msg = str(exc or "")
     low = msg.lower()
+    if looks_like_invalid_credentials(msg) or "账号或密码错误" in msg:
+        return FAIL_INVALID_CREDENTIALS
     if isinstance(exc, AccountRetryNeeded) or "达到最大重试" in msg or "流程卡住" in msg:
         return FAIL_STUCK
     if "sso_timeout" in low or "未获取到 sso" in msg or "未获取到 sso cookie" in msg:
