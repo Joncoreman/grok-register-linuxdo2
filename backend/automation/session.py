@@ -367,7 +367,13 @@ def _store_cached_response(url: str, status: int, headers: dict, body: bytes) ->
         temp_body.write_bytes(body)
         temp_meta.write_text(
             json.dumps(
-                {"status": status, "headers": filtered_headers, "size": len(body)},
+                {
+                    "status": status,
+                    "headers": filtered_headers,
+                    "size": len(body),
+                    "url": str(url),
+                    "cached_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
                 ensure_ascii=True,
                 separators=(",", ":"),
             ),
@@ -377,6 +383,159 @@ def _store_cached_response(url: str, status: int, headers: dict, body: bytes) ->
         os.replace(temp_meta, meta_path)
     except OSError:
         return
+
+
+def _remember_cached_url(url: str) -> None:
+    """旧缓存没有 URL 字段时，命中后补写，方便设置页展示。"""
+    meta_path, _body_path = _low_traffic_cache_paths(url)
+    try:
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        if str(metadata.get("url") or ""):
+            return
+        if not isinstance(metadata, dict):
+            return
+        metadata["url"] = str(url)
+        if not metadata.get("cached_at"):
+            metadata["cached_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        suffix = f".{os.getpid()}.{threading.get_ident()}.tmp"
+        temp_meta = meta_path.with_name(meta_path.name + suffix)
+        temp_meta.write_text(
+            json.dumps(metadata, ensure_ascii=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        os.replace(temp_meta, meta_path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return
+
+
+def _short_cache_url(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or ""))
+        host = parsed.hostname or ""
+        path = parsed.path or ""
+        if len(path) > 96:
+            path = path[:93] + "..."
+        return f"{host}{path}"
+    except ValueError:
+        return str(url or "")[:96]
+
+
+def low_traffic_cache_scope(url: str) -> str:
+    """standard: cdn.grok.com；more: accounts.x.ai 哈希静态资源。"""
+    try:
+        parsed = urlparse(str(url or ""))
+        host = (parsed.hostname or "").lower()
+        path = (parsed.path or "").lower()
+    except ValueError:
+        return "unknown"
+    if host in _LOW_TRAFFIC_CACHE_HOSTS:
+        return "standard"
+    if host in _LOW_TRAFFIC_ACCOUNTS_HOSTS and any(
+        marker in path for marker in _LOW_TRAFFIC_ACCOUNTS_STATIC_MARKERS
+    ):
+        return "more"
+    return "unknown"
+
+
+def _low_traffic_cache_entry_active(scope: str) -> bool:
+    if not low_traffic_enabled():
+        return False
+    if scope == "standard":
+        return True
+    if scope == "more":
+        return traffic_savings_level() == "more"
+    return False
+
+
+def inspect_low_traffic_cache() -> dict:
+    """列出本地静态资源缓存，并标记当前省流级别下哪些条目会生效。"""
+    root = _low_traffic_cache_root()
+    entries: list[dict] = []
+    total_bytes = 0
+    if root.is_dir():
+        try:
+            meta_files = list(root.glob("*.json"))
+        except OSError:
+            meta_files = []
+        for meta_path in meta_files:
+            body_path = meta_path.with_suffix(".bin")
+            try:
+                metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+                headers = metadata.get("headers") if isinstance(metadata.get("headers"), dict) else {}
+                url = str(metadata.get("url") or "")
+                scope = low_traffic_cache_scope(url) if url else "unknown"
+                body_size = body_path.stat().st_size if body_path.is_file() else 0
+                size = int(metadata.get("size") or body_size or 0)
+                total_bytes += size
+                parsed = urlparse(url) if url else None
+                mtime = body_path.stat().st_mtime if body_path.is_file() else meta_path.stat().st_mtime
+                entries.append(
+                    {
+                        "id": meta_path.stem,
+                        "url": url,
+                        "host": ((parsed.hostname or "") if parsed else ""),
+                        "path": ((parsed.path or "") if parsed else ""),
+                        "content_type": str(headers.get("content-type") or ""),
+                        "status": int(metadata.get("status") or 200),
+                        "size": size,
+                        "scope": scope,
+                        "active": _low_traffic_cache_entry_active(scope),
+                        "cached_at": str(metadata.get("cached_at") or ""),
+                        "mtime": mtime,
+                    }
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+    entries.sort(
+        key=lambda item: (
+            -int(bool(item.get("active"))),
+            -int(item.get("size") or 0),
+            str(item.get("url") or item.get("id") or ""),
+        )
+    )
+    active_entries = [item for item in entries if item.get("active")]
+    return {
+        "enabled": low_traffic_enabled(),
+        "savings_level": traffic_savings_level() if low_traffic_enabled() else "",
+        "root": str(root),
+        "total_bytes": total_bytes,
+        "max_total_bytes": _LOW_TRAFFIC_CACHE_TOTAL_BYTES,
+        "max_entry_bytes": _LOW_TRAFFIC_CACHE_MAX_BYTES,
+        "entry_count": len(entries),
+        "active_count": len(active_entries),
+        "active_bytes": sum(int(item.get("size") or 0) for item in active_entries),
+        "refills_on_miss": True,
+        "entries": entries,
+    }
+
+
+def clear_low_traffic_cache() -> dict:
+    """删除本地静态资源缓存。下次打开注册页会按当前省流级别重新下载并写入。"""
+    global _low_traffic_cache_pruned
+    root = _low_traffic_cache_root()
+    deleted = 0
+    errors = 0
+    if root.is_dir():
+        try:
+            names = list(root.iterdir())
+        except OSError:
+            names = []
+        for path in names:
+            if not path.is_file():
+                continue
+            if path.suffix not in {".json", ".bin", ".tmp"} and ".tmp" not in path.name:
+                continue
+            try:
+                path.unlink()
+                deleted += 1
+            except OSError:
+                errors += 1
+    with _low_traffic_cache_prune_lock:
+        _low_traffic_cache_pruned = False
+    snapshot = inspect_low_traffic_cache()
+    snapshot["deleted_files"] = deleted
+    snapshot["errors"] = errors
+    return snapshot
 
 
 def _install_low_traffic_routing(browser_context, log_callback=None) -> None:
@@ -402,6 +561,7 @@ def _install_low_traffic_routing(browser_context, log_callback=None) -> None:
             cached = _cached_response(url)
         if cached is not None:
             status, headers, body = cached
+            _remember_cached_url(url)
             route.fulfill(status=status, headers=headers, body=body)
             return
         try:
@@ -409,9 +569,16 @@ def _install_low_traffic_routing(browser_context, log_callback=None) -> None:
             body = response.body()
             headers = dict(response.headers or {})
             status = int(response.status or 0)
+            stored = False
             with lock:
                 if _cached_response(url) is None:
                     _store_cached_response(url, status, headers, body)
+                    stored = _cached_response(url) is not None
+            if stored and log_callback:
+                log_callback(
+                    "[*] 低流量缓存未命中，已重新下载: "
+                    f"{_short_cache_url(url)} ({len(body)} bytes)"
+                )
             route.fulfill(response=response, body=body)
             return
         except Exception:

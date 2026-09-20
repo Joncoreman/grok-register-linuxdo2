@@ -1,3 +1,33 @@
+export type BrowserCacheEntry = {
+  id: string;
+  url: string;
+  host: string;
+  path: string;
+  content_type: string;
+  status: number;
+  size: number;
+  scope: "standard" | "more" | "unknown" | string;
+  active: boolean;
+  cached_at: string;
+  mtime: number;
+};
+
+export type BrowserCacheSnapshot = {
+  enabled: boolean;
+  savings_level: string;
+  root: string;
+  total_bytes: number;
+  max_total_bytes: number;
+  max_entry_bytes: number;
+  entry_count: number;
+  active_count: number;
+  active_bytes: number;
+  refills_on_miss: boolean;
+  deleted_files?: number;
+  errors?: number;
+  entries: BrowserCacheEntry[];
+};
+
 export type JobStatus = {
   running: boolean;
   started_at?: number | null;
@@ -494,6 +524,9 @@ export const api = {
       "/api/browser/kill-all",
       { method: "POST" }
     ),
+  browserCache: () => request<{ ok: boolean } & BrowserCacheSnapshot>("/api/browser/cache"),
+  clearBrowserCache: () =>
+    request<{ ok: boolean } & BrowserCacheSnapshot>("/api/browser/cache/clear", { method: "POST" }),
   connectivity: () =>
     request<{ ok: boolean; items: Array<{ name: string; ok: boolean; detail: string }>; blocked: boolean }>(
       "/api/connectivity",

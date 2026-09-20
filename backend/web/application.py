@@ -1566,6 +1566,28 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=f"终止浏览器失败: {exc}") from exc
         return {"ok": True, **result, "job": job_coordinator.status()}
 
+    @app.get("/api/browser/cache")
+    def api_browser_cache() -> Dict[str, Any]:
+        gr = _gr()
+        gr.load_config()
+        gr._wire_runtime_modules()
+        try:
+            snapshot = gr._bs.inspect_low_traffic_cache()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"读取缓存失败: {exc}") from exc
+        return {"ok": True, **snapshot}
+
+    @app.post("/api/browser/cache/clear")
+    def api_browser_cache_clear() -> Dict[str, Any]:
+        gr = _gr()
+        gr.load_config()
+        gr._wire_runtime_modules()
+        try:
+            snapshot = gr._bs.clear_low_traffic_cache()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"清空缓存失败: {exc}") from exc
+        return {"ok": True, **snapshot}
+
     @app.api_route("/api/connectivity", methods=["GET", "POST"])
     def api_connectivity() -> Dict[str, Any]:
         gr = _gr()

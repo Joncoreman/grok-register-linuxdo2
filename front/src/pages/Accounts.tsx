@@ -130,7 +130,9 @@ function grokiqResultLabel(result?: AccountRecord["grokiq_result"] | null) {
 }
 
 function grokiqDegraded(result?: AccountRecord["grokiq_result"] | null) {
-  return Boolean(result?.degraded);
+  if (!result) return false;
+  const verdict = String(result.verdict || "").trim().toLowerCase();
+  return Boolean(result.degraded) || verdict === "degraded" || verdict === "quarantined";
 }
 
 function accountHasRisk(item: Pick<AccountRecord, "bot_risk" | "grokiq_result">) {
@@ -1359,7 +1361,7 @@ export function AccountsPage() {
               <option value="not_applicable">不适用</option>
             </Select>
             </div>
-            <div className="w-full sm:w-44"><label htmlFor="account-risk-filter" className="mb-1.5 block text-xs font-medium text-slate-500">风控状态</label>
+            <div className="w-full sm:w-48"><label htmlFor="account-risk-filter" className="mb-1.5 block text-xs font-medium text-slate-500">风控状态</label>
             <Select
               id="account-risk-filter"
               value={botRiskFilter}
@@ -1371,6 +1373,7 @@ export function AccountsPage() {
             >
               <option value="">不限</option>
               <option value="1">异常账号</option>
+              <option value="grokiq">GrokIQ 降智</option>
               <option value="0">正常账号</option>
               <option value="unknown">未检查 / 未知</option>
             </Select>
