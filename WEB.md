@@ -94,7 +94,7 @@ backend/tests/         # 后端单元测试
 
 设置页可选择 `Camoufox`（默认）或 `CloakBrowser` 浏览器后端，并可启用“无头浏览器”。两个后端共用注册步骤、代理、语言与结果处理逻辑。
 
-账号重新登录与注册共用低流量缓存。获取新 SSO 后直接重建 CPA / Grok2API 授权文件。登录页提示 `Wrong email address or password` 时记为账号密码错误，不再当成 SSO 超时。上游已不再下发 `bfs` / `botFlagSource`，重登不再根据该字段中断；账号级降智检测交给 GrokIQ。
+账号重新登录与注册共用低流量缓存。默认使用较少节省（只缓存 grok.com CDN）；更多节省会额外缓存 accounts.x.ai 哈希资源，但设置页会按文件内容标出 Castle / Mixpanel / Turnstile 等高风险 JS，这些文件即使已缓存也不会回放。获取新 SSO 后直接重建 CPA / Grok2API 授权文件。登录页提示 `Wrong email address or password` 时记为账号密码错误，不再当成 SSO 超时。上游已不再下发 `bfs` / `botFlagSource`，重登不再根据该字段中断；账号级降智检测交给 GrokIQ。
 
 注册页的“终止全部浏览器”用于异常兜底：先请求停止当前任务，再终止 Camoufox 与 CloakBrowser 进程树并清理本项目创建的临时资料目录。紧急终止后，下一次手动启动注册任务才会重新允许浏览器启动。
 

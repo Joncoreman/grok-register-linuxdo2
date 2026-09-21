@@ -144,7 +144,36 @@ _LOW_TRAFFIC_CACHE_EXCLUDED_HEADERS = {
     "content-length",
     "transfer-encoding",
     "set-cookie",
+    "cf-ray",
+    "age",
+    "date",
 }
+_CACHE_RISK_SCAN_LIMIT = 2 * 1024 * 1024
+_CACHE_RISK_ORDER = {"high": 0, "medium": 1, "low": 2, "unknown": 3}
+# 命中任一标记即视为高风险：跨账号回放会污染设备指纹、登录遥测或 Turnstile 时序。
+_CACHE_RISK_HIGH_MARKERS = (
+    ("m.castle.io", "Castle 设备指纹 SDK"),
+    ("rtcpeerconnection", "WebRTC ICE 出口探测"),
+    ("mozrtcpeerconnection", "WebRTC ICE 出口探测"),
+    ("gethighentropyvalues", "UA Client Hints 高熵指纹"),
+    ("api-js.mixpanel.com", "Mixpanel 分析 SDK"),
+    ("cdn.mxpnl.com", "Mixpanel 分析 SDK"),
+    ("challenges.cloudflare.com/turnstile", "Cloudflare Turnstile 加载器"),
+    ("reportturnstileerror", "Turnstile 错误上报"),
+    ("auth.turnstile.challenge", "Turnstile 挑战追踪"),
+    ("highlightturnstile", "Turnstile 登录校验脚本"),
+    ("api.axiom.co", "Axiom web-vitals 遥测"),
+    ("http.response_transfer_size", "Resource Timing 传输体积"),
+    ("device.processor_count", "Sentry 硬件信息采集"),
+)
+_CACHE_RISK_MEDIUM_MARKERS = (
+    ("connect.facebook.net", "广告像素 / 追踪脚本"),
+    ("ads-twitter.com", "广告像素 / 追踪脚本"),
+    ("analytics.twitter.com", "广告像素 / 追踪脚本"),
+    ("pixel-config.reddit.com", "广告像素 / 追踪脚本"),
+    ("navigator.webdriver", "自动化特征探测"),
+    ("web-vitals", "Web Vitals 性能埋点"),
+)
 _low_traffic_cache_pruned = False
 _low_traffic_cache_prune_lock = threading.Lock()
 
@@ -227,11 +256,11 @@ def low_traffic_enabled() -> bool:
 def traffic_savings_level() -> str:
     """standard: grok.com 省流；more: 额外缓存 accounts.x.ai 哈希静态资源。"""
     if not _get_traffic_savings_level:
-        return "more"
-    value = str(_get_traffic_savings_level() or "more").strip().lower()
-    if value in {"standard", "less", "light"}:
         return "standard"
-    return "more"
+    value = str(_get_traffic_savings_level() or "standard").strip().lower()
+    if value in {"more", "max"}:
+        return "more"
+    return "standard"
 
 
 def low_traffic_should_block(url: str, resource_type: str) -> bool:
@@ -420,6 +449,47 @@ def _short_cache_url(url: str) -> str:
         return str(url or "")[:96]
 
 
+def path_looks_like_js(parsed) -> bool:
+    path = str(getattr(parsed, "path", "") or "").lower()
+    return path.endswith(".js") or "/_next/static/chunks/" in path
+
+
+def classify_low_traffic_cache_risk(url: str = "", body=b"", content_type: str = "") -> dict:
+    """根据缓存文件内容判断回放风险。高风险 JS 不回放，避免跨账号污染指纹。"""
+    ctype = str(content_type or "").lower()
+    path = ""
+    try:
+        path = (urlparse(str(url or "")).path or "").lower()
+    except ValueError:
+        path = str(url or "").lower()
+    if (
+        "text/css" in ctype
+        or "font/" in ctype
+        or "application/font" in ctype
+        or path.endswith((".css", ".woff", ".woff2", ".ttf", ".otf", ".eot"))
+    ):
+        return {
+            "level": "low",
+            "reasons": ["样式或字体，回放风险低"],
+            "replay_safe": True,
+        }
+    raw = body if isinstance(body, (bytes, bytearray)) else str(body or "").encode("utf-8", errors="ignore")
+    text_blob = bytes(raw[:_CACHE_RISK_SCAN_LIMIT]).decode("utf-8", errors="ignore")
+    blob = f"{url}\n{path}\n{text_blob}".lower()
+    reasons: list[str] = []
+    for needle, reason in _CACHE_RISK_HIGH_MARKERS:
+        if needle in blob and reason not in reasons:
+            reasons.append(reason)
+    if reasons:
+        return {"level": "high", "reasons": reasons, "replay_safe": False}
+    for needle, reason in _CACHE_RISK_MEDIUM_MARKERS:
+        if needle in blob and reason not in reasons:
+            reasons.append(reason)
+    if reasons:
+        return {"level": "medium", "reasons": reasons, "replay_safe": True}
+    return {"level": "low", "reasons": ["未发现指纹或遥测特征"], "replay_safe": True}
+
+
 def low_traffic_cache_scope(url: str) -> str:
     """standard: cdn.grok.com；more: accounts.x.ai 哈希静态资源。"""
     try:
@@ -437,8 +507,8 @@ def low_traffic_cache_scope(url: str) -> str:
     return "unknown"
 
 
-def _low_traffic_cache_entry_active(scope: str) -> bool:
-    if not low_traffic_enabled():
+def _low_traffic_cache_entry_active(scope: str, replay_safe: bool = True) -> bool:
+    if not low_traffic_enabled() or not replay_safe:
         return False
     if scope == "standard":
         return True
@@ -469,17 +539,32 @@ def inspect_low_traffic_cache() -> dict:
                 total_bytes += size
                 parsed = urlparse(url) if url else None
                 mtime = body_path.stat().st_mtime if body_path.is_file() else meta_path.stat().st_mtime
+                content_type = str(headers.get("content-type") or "")
+                body = b""
+                if body_path.is_file() and (
+                    "javascript" in content_type.lower() or path_looks_like_js(parsed)
+                ):
+                    try:
+                        body = body_path.read_bytes()[:_CACHE_RISK_SCAN_LIMIT]
+                    except OSError:
+                        body = b""
+                risk = classify_low_traffic_cache_risk(url, body, content_type)
                 entries.append(
                     {
                         "id": meta_path.stem,
                         "url": url,
                         "host": ((parsed.hostname or "") if parsed else ""),
                         "path": ((parsed.path or "") if parsed else ""),
-                        "content_type": str(headers.get("content-type") or ""),
+                        "content_type": content_type,
                         "status": int(metadata.get("status") or 200),
                         "size": size,
                         "scope": scope,
-                        "active": _low_traffic_cache_entry_active(scope),
+                        "risk_level": risk["level"],
+                        "risk_reasons": risk["reasons"],
+                        "replay_safe": bool(risk["replay_safe"]),
+                        "active": _low_traffic_cache_entry_active(
+                            scope, bool(risk["replay_safe"])
+                        ),
                         "cached_at": str(metadata.get("cached_at") or ""),
                         "mtime": mtime,
                     }
@@ -488,12 +573,15 @@ def inspect_low_traffic_cache() -> dict:
                 continue
     entries.sort(
         key=lambda item: (
+            _CACHE_RISK_ORDER.get(str(item.get("risk_level") or "unknown"), 9),
             -int(bool(item.get("active"))),
             -int(item.get("size") or 0),
             str(item.get("url") or item.get("id") or ""),
         )
     )
     active_entries = [item for item in entries if item.get("active")]
+    high_risk = [item for item in entries if item.get("risk_level") == "high"]
+    medium_risk = [item for item in entries if item.get("risk_level") == "medium"]
     return {
         "enabled": low_traffic_enabled(),
         "savings_level": traffic_savings_level() if low_traffic_enabled() else "",
@@ -504,6 +592,9 @@ def inspect_low_traffic_cache() -> dict:
         "entry_count": len(entries),
         "active_count": len(active_entries),
         "active_bytes": sum(int(item.get("size") or 0) for item in active_entries),
+        "high_risk_count": len(high_risk),
+        "medium_risk_count": len(medium_risk),
+        "high_risk_bytes": sum(int(item.get("size") or 0) for item in high_risk),
         "refills_on_miss": True,
         "entries": entries,
     }
@@ -561,24 +652,44 @@ def _install_low_traffic_routing(browser_context, log_callback=None) -> None:
             cached = _cached_response(url)
         if cached is not None:
             status, headers, body = cached
-            _remember_cached_url(url)
-            route.fulfill(status=status, headers=headers, body=body)
-            return
+            risk = classify_low_traffic_cache_risk(
+                url, body, headers.get("content-type")
+            )
+            if risk.get("replay_safe"):
+                _remember_cached_url(url)
+                route.fulfill(status=status, headers=headers, body=body)
+                return
+            if log_callback:
+                reasons = "、".join(risk.get("reasons") or []) or "高风险脚本"
+                log_callback(
+                    "[!] 低流量缓存跳过回放: "
+                    f"{_short_cache_url(url)}（{reasons}）"
+                )
         try:
             response = route.fetch()
             body = response.body()
             headers = dict(response.headers or {})
             status = int(response.status or 0)
             stored = False
+            risk = classify_low_traffic_cache_risk(
+                url, body, headers.get("content-type")
+            )
             with lock:
                 if _cached_response(url) is None:
                     _store_cached_response(url, status, headers, body)
                     stored = _cached_response(url) is not None
             if stored and log_callback:
-                log_callback(
-                    "[*] 低流量缓存未命中，已重新下载: "
-                    f"{_short_cache_url(url)} ({len(body)} bytes)"
-                )
+                if risk.get("replay_safe"):
+                    log_callback(
+                        "[*] 低流量缓存未命中，已重新下载: "
+                        f"{_short_cache_url(url)} ({len(body)} bytes)"
+                    )
+                else:
+                    reasons = "、".join(risk.get("reasons") or []) or "高风险脚本"
+                    log_callback(
+                        "[!] 低流量缓存已保存但不会回放: "
+                        f"{_short_cache_url(url)}（{reasons}）"
+                    )
             route.fulfill(response=response, body=body)
             return
         except Exception:
@@ -588,6 +699,7 @@ def _install_low_traffic_routing(browser_context, log_callback=None) -> None:
     if log_callback:
         if traffic_savings_level() == "more":
             log_callback("[*] 低流量模式：已启用 grok.com 与 accounts.x.ai 静态资源缓存与非业务媒体拦截")
+            log_callback("[!] 更多节省会跳过 Castle/Mixpanel/Turnstile 等高风险 JS 回放；其余 accounts 哈希资源仍可能影响账号质量，追求质量请用较少节省")
         else:
             log_callback("[*] 低流量模式：已启用 grok.com 静态资源缓存与非业务媒体拦截")
 

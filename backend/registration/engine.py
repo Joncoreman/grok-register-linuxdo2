@@ -335,7 +335,7 @@ DEFAULT_CONFIG = {
     "browser_headless": False,
     "browser_locale": "en-US",
     "browser_low_traffic_mode": True,
-    "browser_traffic_savings_level": "more",
+    "browser_traffic_savings_level": "standard",
     "close_browser_on_stop": False,
     "log_level": "info",
     "register_count": 1,
@@ -2915,10 +2915,10 @@ def is_browser_low_traffic_mode() -> bool:
 
 
 def get_browser_traffic_savings_level() -> str:
-    value = str(config.get("browser_traffic_savings_level") or "more").strip().lower()
-    if value in {"standard", "less", "light"}:
-        return "standard"
-    return "more"
+    value = str(config.get("browser_traffic_savings_level") or "standard").strip().lower()
+    if value in {"more", "max"}:
+        return "more"
+    return "standard"
 
 
 def should_close_browser_after_run(user_stopped: bool) -> bool:

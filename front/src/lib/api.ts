@@ -7,6 +7,9 @@ export type BrowserCacheEntry = {
   status: number;
   size: number;
   scope: "standard" | "more" | "unknown" | string;
+  risk_level?: "high" | "medium" | "low" | "unknown" | string;
+  risk_reasons?: string[];
+  replay_safe?: boolean;
   active: boolean;
   cached_at: string;
   mtime: number;
@@ -22,6 +25,9 @@ export type BrowserCacheSnapshot = {
   entry_count: number;
   active_count: number;
   active_bytes: number;
+  high_risk_count?: number;
+  medium_risk_count?: number;
+  high_risk_bytes?: number;
   refills_on_miss: boolean;
   deleted_files?: number;
   errors?: number;

@@ -404,9 +404,13 @@ def _apply_config_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
             if value not in {"camoufox", "cloakbrowser"}:
                 value = "camoufox"
         elif key == "browser_traffic_savings_level":
-            value = str(value or "more").strip().lower()
-            if value not in {"standard", "more", "max"}:
+            value = str(value or "standard").strip().lower()
+            if value in {"standard", "less", "light"}:
+                value = "standard"
+            elif value in {"more", "max"}:
                 value = "more"
+            else:
+                value = "standard"
         elif key == "email_provider":
             value = str(value or "cloudflare").strip().lower() or "cloudflare"
             if value not in {"cloudflare", "duckmail", "yyds", "mailnest", "outlookemail", "cloudmail"}:

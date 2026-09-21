@@ -393,6 +393,97 @@ class LowTrafficCacheTests(unittest.TestCase):
         self.assertEqual(labeled["entries"][0]["scope"], "standard")
         self.assertTrue(labeled["entries"][0]["active"])
 
+    def test_missing_savings_level_defaults_to_standard(self):
+        browser_session.configure(is_low_traffic=lambda: True, get_traffic_savings_level=None)
+        self.assertEqual(browser_session.traffic_savings_level(), "standard")
+        self.assertFalse(
+            browser_session.low_traffic_should_cache(
+                "https://accounts.x.ai/_next/static/chunks/app-hash.js", "script"
+            )
+        )
+        self.assertTrue(
+            browser_session.low_traffic_should_cache(
+                "https://cdn.grok.com/assets/app.js", "script"
+            )
+        )
+
+    def test_more_mode_logs_quality_warning(self):
+        context = mock.Mock()
+        logs = []
+        browser_session._install_low_traffic_routing(context, logs.append)
+        self.assertTrue(any("accounts.x.ai" in message for message in logs))
+        self.assertTrue(any("高风险 JS" in message for message in logs))
+
+        logs.clear()
+        browser_session.configure(
+            is_low_traffic=lambda: True,
+            get_traffic_savings_level=lambda: "standard",
+        )
+        context = mock.Mock()
+        browser_session._install_low_traffic_routing(context, logs.append)
+        self.assertTrue(any("低流量模式：已启用 grok.com 静态资源缓存" in message for message in logs))
+        self.assertFalse(any("降智" in message for message in logs))
+
+    def test_cache_risk_classifier_flags_castle_mixpanel_and_turnstile(self):
+        castle = browser_session.classify_low_traffic_cache_risk(
+            "https://accounts.x.ai/_next/static/chunks/245w6.js",
+            b"window.RTCPeerConnection; fetch('https://m.castle.io/v1/monitor'); navigator.userAgentData.getHighEntropyValues([])",
+            "application/javascript",
+        )
+        self.assertEqual(castle["level"], "high")
+        self.assertFalse(castle["replay_safe"])
+        self.assertTrue(any("Castle" in reason for reason in castle["reasons"]))
+
+        mixpanel = browser_session.classify_low_traffic_cache_risk(
+            "https://accounts.x.ai/_next/static/chunks/mix.js",
+            b"https://api-js.mixpanel.com/track",
+            "application/javascript",
+        )
+        self.assertEqual(mixpanel["level"], "high")
+        self.assertFalse(mixpanel["replay_safe"])
+
+        css = browser_session.classify_low_traffic_cache_risk(
+            "https://accounts.x.ai/_next/static/chunks/app.css",
+            b"body{color:#000}",
+            "text/css",
+        )
+        self.assertEqual(css["level"], "low")
+        self.assertTrue(css["replay_safe"])
+
+        ads = browser_session.classify_low_traffic_cache_risk(
+            "https://accounts.x.ai/_next/static/chunks/ads.js",
+            b"https://connect.facebook.net/en_US/fbevents.js",
+            "application/javascript",
+        )
+        self.assertEqual(ads["level"], "medium")
+        self.assertTrue(ads["replay_safe"])
+
+    def test_high_risk_script_is_not_replayed_from_cache(self):
+        url = "https://accounts.x.ai/_next/static/chunks/castle.js"
+        body = b"fetch('https://m.castle.io/v1/monitor'); window.RTCPeerConnection"
+        browser_session._store_cached_response(
+            url,
+            200,
+            {"content-type": "application/javascript"},
+            body,
+        )
+        context = mock.Mock()
+        logs = []
+        browser_session._install_low_traffic_routing(context, logs.append)
+        _matcher, handler = context.route.call_args.args
+        route = mock.Mock()
+        route.fetch.return_value = self._script_response(body)
+        request = mock.Mock(url=url, resource_type="script", method="GET", headers={})
+        handler(route, request)
+        route.fetch.assert_called_once()
+        self.assertTrue(any("跳过回放" in message and "Castle" in message for message in logs))
+        snapshot = browser_session.inspect_low_traffic_cache()
+        entry = snapshot["entries"][0]
+        self.assertEqual(entry["risk_level"], "high")
+        self.assertFalse(entry["active"])
+        self.assertFalse(entry["replay_safe"])
+        self.assertGreaterEqual(snapshot["high_risk_count"], 1)
+
     def test_standard_mode_does_not_treat_accounts_hash_cache_as_active(self):
         browser_session._store_cached_response(
             "https://cdn.grok.com/assets/app.js",
