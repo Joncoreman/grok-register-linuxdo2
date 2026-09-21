@@ -294,7 +294,7 @@ cd front && npm run build
 ## 新版本检测
 
 服务启动后会读取根目录 `VERSION`，立即查询一次 GitHub Releases，之后每
-1 小时复查。发现高于当前版本的正式 Release 时，管理控制台会自动弹出更新提示，
+15 分钟复查。发现高于当前版本的正式 Release 时，管理控制台会自动弹出更新提示，
 展示版本号、Markdown 更新说明和 Release 链接；关闭后同一版本不再重复弹出，更高版本
 发布后会重新提示。Release 正文按 GitHub Markdown 渲染，标题、列表、链接和代码块会显示在弹窗里。
 
